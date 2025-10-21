@@ -40,7 +40,7 @@ class TestDeliverySendCloudControllers(HttpCase):
             "public_key": "test",
             "secret_key": "test",
         }
-        self.integration = self.env["sendcloud.integration"].create(vals)
+        self.integration = self.env["sendcloud.integration"].create([vals])
 
     @mute_logger("py.warnings")
     def test_01_sendcloud_integration_credentials(self):
@@ -268,6 +268,13 @@ class TestDeliverySendCloudControllers(HttpCase):
             sale_order.with_context(
                 force_sendcloud_shipment_code="c9b2058d-2621-4ce5-afb0-f14e8e5565b6"
             ).action_confirm()
+        self.env.ref("base.user_admin").write(
+            {
+                "groups_id": [
+                    (4, self.env.ref("stock.group_stock_manager").id),
+                ]
+            }
+        )
         self.authenticate("admin", "admin")
         res = self.url_open(
             url="/sendcloud/picking/download_labels",

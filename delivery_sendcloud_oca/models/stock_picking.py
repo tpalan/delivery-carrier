@@ -50,7 +50,6 @@ class StockPicking(models.Model):
     )
     sendcloud_shipment_code = fields.Char(index=True, copy=False)
     sendcloud_sp_details = fields.Char(compute="_compute_sendcloud_sp_details")
-
     label_print_status = fields.Selection(
         [
             ("generated", "Generated"),
@@ -60,6 +59,31 @@ class StockPicking(models.Model):
         compute="_compute_label_print_status",
         store=True,
     )
+    package_ids = fields.Many2many(
+        "stock.quant.package", compute="_compute_packages", string="Packages"
+    )
+
+    @api.depends("move_line_ids", "move_line_ids.result_package_id")
+    def _compute_packages(self):
+        counts = dict(
+            self.env["stock.move.line"]._read_group(
+                domain=[
+                    ("picking_id", "in", self.ids),
+                    ("result_package_id", "!=", False),
+                ],
+                groupby=["picking_id"],
+                aggregates=["__count"],
+            )
+        )
+        self.fetch(["move_line_ids"])
+        self.move_line_ids.fetch(["result_package_id"])
+        for picking in self:
+            packs = set()
+            if counts.get(picking, 0):
+                for move_line in picking.move_line_ids:
+                    if move_line.result_package_id:
+                        packs.add(move_line.result_package_id.id)
+            picking.package_ids = list(packs)
 
     @api.depends("sendcloud_parcel_ids", "sendcloud_parcel_ids.label_print_status")
     def _compute_label_print_status(self):
@@ -422,14 +446,14 @@ class StockPicking(models.Model):
             [("name", "=", "product_harmonized_system"), ("state", "=", "installed")],
             limit=1,
         )
-        if is_product_harmonized_system_installed:
+        if is_product_harmonized_system_installed:  # pragma: no cover
             # use field provided by OCA module "product_harmonized_system" if installed
             hs_code = product_tmplate.hs_code_id.hs_code
             origin_country = product_tmplate.origin_country_id.code or origin_country
         is_account_intrastat_installed = self.env["ir.module.module"].search(
             [("name", "=", "account_intrastat"), ("state", "=", "installed")], limit=1
         )
-        if is_account_intrastat_installed:
+        if is_account_intrastat_installed:  # pragma: no cover
             # use field provided by Enterprise module "account_intrastat" if installed
             hs_code = product_tmplate.intrastat_code_id.code or hs_code
             origin_country = (
@@ -579,8 +603,8 @@ class StockPicking(models.Model):
         if self.mapped("sendcloud_parcel_ids").mapped("attachment_id"):
             return {
                 "type": "ir.actions.act_url",
-                "url": "/sendcloud/picking/download_labels?ids=%s"
-                % (",".join([str(id) for id in self.ids])),
+                "url": f"/sendcloud/picking/download_labels?"
+                f"ids={(','.join([str(id) for id in self.ids]))}",
                 "target": "self",
             }
 

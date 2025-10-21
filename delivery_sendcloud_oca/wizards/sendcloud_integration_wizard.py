@@ -59,7 +59,7 @@ class SendcloudIntegrationWizard(models.TransientModel):
             resp = requests.post(url=url, json={}, timeout=10)
         except Exception as err:
             self.error_message = _("Error while checking the webhook connection.\n")
-            self.error_message += "%s\n" % str(err)
+            self.error_message += f"{str(err)}\n"
             self.error_message += _("Webhook URL: %(url)s\n") % {"url": url}
             return False
         if resp.status_code != 200:
@@ -67,8 +67,8 @@ class SendcloudIntegrationWizard(models.TransientModel):
                 {"reason": resp.reason, "status_code": resp.status_code}
             )
             self.error_message = _("Error while checking the webhook connection.\n")
-            self.error_message += "%s\n" % err_msg
-            self.error_message += "URL: %s\n" % url
+            self.error_message += f"{err_msg}\n"
+            self.error_message += f"URL: {url}\n"
             return False
         return True
 
@@ -79,10 +79,12 @@ class SendcloudIntegrationWizard(models.TransientModel):
             lambda i: not i.sendcloud_code and not i.public_key and not i.secret_key
         )
         if not integrations:
-            vals = {
-                "shop_name": "API Integration " + self.env.company.name,
-                "company_id": self.env.company.id,
-            }
+            vals = [
+                {
+                    "shop_name": "API Integration " + self.env.company.name,
+                    "company_id": self.env.company.id,
+                }
+            ]
             self.env["sendcloud.integration"].create(vals)
         if not self.check_webhook_url():
             action_name = (
