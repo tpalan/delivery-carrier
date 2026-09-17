@@ -78,6 +78,16 @@ License AGPL-3.0 or later (https://www.gnu.org/licenses/agpl).
                             />
                         </group>
                     </group>
+                    <group>
+                        <group string="Customs declaration">
+                            <field
+                                name="ups_customs_declaration_country_group_ids"
+                                widget="many2many_tags"
+                            />
+                            <field name="ups_shipper" />
+                            <field name="ups_shipper_contact_name" />
+                        </group>
+                    </group>
                 </page>
             </xpath>
         </field>

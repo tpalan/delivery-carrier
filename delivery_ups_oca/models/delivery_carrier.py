@@ -112,6 +112,17 @@ class DeliveryCarrier(models.Model):
         string="Negotiated Rates",
         help="If checked, UPS will use the account's negotiated rates for shipping.",
     )
+    ups_customs_declaration_country_group_ids = fields.Many2many(
+        "res.country.group",
+        string="Country group to auto-send customs declaration",
+        help="If the destination country is in one of these country groups, "
+             "the connector will transmit H.S. codes and invoice information automatically on shipment/label generation.",
+    )
+    ups_shipper = fields.Many2one(comodel_name="res.partner",string="UPS Shipper Address")
+    ups_shipper_contact_name = fields.Char(
+        string="UPS Shipper Contact Name",
+        help="The name of the contact person for the shipper.",
+    )
 
     def _ups_get_response_price(self, total_charges, currency, company):
         """We need to convert the price if the currency is different."""

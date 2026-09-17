@@ -52,7 +52,7 @@ class TestDeliveryUpsBase(common.TransactionCase):
         cls.company.partner_id.write(
             {
                 "phone": f"+{cls.company.country_id.phone_code}976123456",
-                "vat": f"{cls.company.country_id.code}09915370R",
+                "vat": f"{cls.company.country_id.code}U12345675",
             }
         )
         cls.partner = cls.env["res.partner"].create(
