@@ -8,7 +8,6 @@ import base64
 import logging
 from io import BytesIO
 
-import PIL
 from PIL import Image
 
 from odoo import fields, models
@@ -225,7 +224,7 @@ class DeliveryCarrier(models.Model):
         im = Image.open(image_string)
 
         # rotate to make it portrait
-        im = im.transpose(PIL.Image.ROTATE_270)
+        im = im.transpose(Image.ROTATE_270)
 
         # UPS returns a 4"x8" label with whitespace at the bottom
         # crop image to 4" to 6"
