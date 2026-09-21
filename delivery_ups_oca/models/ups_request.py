@@ -198,7 +198,7 @@ class UpsRequest:
             else False
         )
 
-    def _partner_to_shipping_data(self, partner, **kwargs):
+    def _partner_to_shipping_data(self, partner, named_person=None, **kwargs):
         """Return a dict describing a partner for the shipping request"""
         address_dict = dict(
             AddressLine=self._build_address_lines(partner),
@@ -212,11 +212,18 @@ class UpsRequest:
         if partner._is_ups_residential_address():
             address_dict["ResidentialAddressIndicator"] = ""
 
+        def _sanitize_phone_ups(phone):
+            return phone.replace(" ", "").replace("-", "").replace(".", "").replace("(", "").replace(")", "")
+
+        def _sanitize_name_ups(name):
+            return name.replace("/", "").replace("  "," ")
+
+
         vals = dict(
             **kwargs,
-            Name=((partner.parent_id or partner).name or "")[:35],
-            AttentionName=(partner.name or "")[:35],
-            Phone=dict(Number=partner.phone or partner.mobile),
+            Name=_sanitize_name_ups((partner.parent_id or partner).name or "")[:35],
+            AttentionName=_sanitize_name_ups(named_person or partner.name or "")[:35],
+            Phone=dict(Number=_sanitize_phone_ups(partner.phone or partner.mobile or "")),
             EMailAddress=partner.email,
             Address=address_dict,
         )
@@ -245,6 +252,81 @@ class UpsRequest:
         if api_format != "GIF":
             res["LabelStockSize"] = {"Height": "6", "Width": "4"}
         return res
+
+    def _product_data_from_picking(self, picking):
+        # we need a reference to the sale_order bc we need prices
+        sale = picking.sale_id
+        if not sale:
+            return [None, None]
+
+        invoices = picking.sale_id.invoice_ids.filtered(
+            lambda i: i.state == "posted" and i.move_type == "out_invoice"
+        )
+        if len(invoices) == 0:
+            raise UserError(_("No posted invoice found for the picking."))
+        if len(invoices) != 1:
+            raise UserError(
+                _("Only one posted invoice per picking is allowed for international shipments.")
+            )
+        invoice = invoices[0]
+        if not invoice.invoice_incoterm_id:
+            raise UserError(_("Incoterm on invoice is required for international shipments."))
+
+        is_product_harmonized_system_installed = self.carrier.env["ir.module.module"].search(
+            [("name", "=", "product_harmonized_system"), ("state", "=", "installed")],
+            limit=1,
+        )
+        is_account_intrastat_installed = self.carrier.env["ir.module.module"].search(
+            [("name", "=", "account_intrastat"), ("state", "=", "installed")], limit=1
+        )
+
+        vals = []
+
+        for move in picking.move_ids_without_package:
+            # number of items
+            number = int(move.product_uom_qty)
+            if not number or number == 0:
+                continue
+
+            # get product information (price) from invoice
+            matching_lines = invoice.line_ids.filtered(lambda l: l.product_id.id == move.product_id.id)
+            if not matching_lines:
+                _logger.warning("No matching invoice lines found for product %s", move.product_id.name)
+                continue
+            # what to do when multiple lines found, potentially with different prices?
+            order_line = matching_lines[0]
+            product = order_line.product_id
+
+            hs_code = product.hs_code
+            origin_country_code = product.country_of_origin.code
+
+            if is_product_harmonized_system_installed:  # pragma: no cover
+                # use field provided by OCA module "product_harmonized_system" if installed
+                hs_code = product.hs_code_id.hs_code or hs_code
+                origin_country_code = product.origin_country_id.code or origin_country_code
+            if is_account_intrastat_installed:  # pragma: no cover
+                # use field provided by Enterprise module "account_intrastat" if installed
+                hs_code = product.intrastat_code_id.code or hs_code
+                origin_country_code = (
+                        product.intrastat_origin_country_id.code or origin_country_code
+                )
+            if not hs_code:
+                continue
+            vals.append({
+                "Description": product.description_sale,
+                "TariffCode": hs_code,
+                "Unit": {
+                    "Number": str(number),
+                    "UnitOfMeasurement": {
+                        "Code": "PCS",
+                        "Description": "Pieces"
+                    },
+                    "Value": str(order_line.price_unit),
+                },
+                "OriginCountryCode": origin_country_code,
+                "TotalValue": str(number * order_line.price_unit),
+            })
+        return [vals, invoice] if len(vals) > 0 else [None, invoice]
 
     def _is_same_origin_dest(self, ship_from, ship_to):
         if not ship_from.country_id or not ship_to.country_id:
@@ -286,7 +368,7 @@ class UpsRequest:
             or picking.company_id.partner_id
         )
         partner_to = picking.partner_id
-        ship_from = self._partner_to_shipping_data(partner_from)
+        ship_from = self._partner_to_shipping_data(partner=partner_from, named_person=self.carrier.ups_shipper_contact_name)
         ship_to = self._partner_to_shipping_data(partner_to)
         same_origin_and_dest = self._is_same_origin_dest(partner_from, partner_to)
         if same_origin_and_dest and not ship_to["Phone"]["Number"]:
@@ -297,7 +379,8 @@ class UpsRequest:
                 "Shipment": {
                     "Description": picking.name,
                     "Shipper": self._partner_to_shipping_data(
-                        partner=picking.company_id.partner_id,
+                        partner=self.carrier.ups_shipper or picking.company_id.partner_id,
+                        named_person=self.carrier.ups_shipper_contact_name,
                         ShipperNumber=self.shipper_number,
                     ),
                     "ShipTo": ship_to,
@@ -334,6 +417,26 @@ class UpsRequest:
                     }
                 },
             )
+        # Add customs declaration, H.S. codes if ship_to is in listed country
+        customs_country_ids = self.carrier.ups_customs_declaration_country_group_ids
+        if customs_country_ids and partner_to.country_id in customs_country_ids.mapped("country_ids"):
+            _logger.debug("Adding customs declaration, H.S. codes")
+            product_data, invoice = self._product_data_from_picking(picking)
+            if product_data and picking.sale_id:
+                shipment = vals["ShipmentRequest"]["Shipment"]
+                shipment.setdefault("ShipmentServiceOptions", {})["InternationalForms"] = {
+                    "FormType": "01",
+                    "Product": product_data,
+                    "InvoiceDate": invoice.invoice_date.strftime("%Y%m%d"),
+                    "InvoiceNumber": invoice.name,
+                    "ReasonForExport": "SALE",
+                    "PurchaseOrderNumber": picking.sale_id.name,
+                    "TermsOfSale": invoice.invoice_incoterm_id.code,
+                    "CurrencyCode": invoice.currency_id.name,
+                    "Contacts": {
+                        "SoldTo": ship_to,
+                    }
+                }
         return vals
 
     def _send_shipping(self, picking):
